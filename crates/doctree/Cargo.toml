@@ -4,6 +4,7 @@ description = "Document tree (AST) types: nodes, spans and metadata."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [lints]
