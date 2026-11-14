@@ -11,3 +11,10 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+schemars = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+
+[features]
+# Derive JSON Schemas for the public types.
+schema = ["dep:schemars"]
