@@ -143,7 +143,10 @@ impl<'a> Iterator for Descendants<'a> {
 ///
 /// Serialized with a `type` tag holding the [`Node::kind`] name, for core
 /// kinds, followed by the variant's fields.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+// Deserializing is hand-written (see the `de` module) because serde's
+// derived decoder for internally tagged enums buffers every node before
+// reading it, which made decoding several times slower than encoding.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Node {
@@ -365,6 +368,155 @@ impl Node {
     /// Iterates over this node and everything below it, depth first.
     pub fn descendants(&self) -> Descendants<'_> {
         Descendants { stack: vec![self] }
+    }
+}
+
+mod de {
+    //! A [`Deserialize`] for [`Node`] that reads the `type` tag first, then
+    //! decodes the rest of the map straight into the variant's struct.
+    //!
+    //! Our encoder always writes `type` first, so this is the usual path. A
+    //! map whose first key is something else (e.g. a node built in Python or
+    //! JavaScript with its keys in another order) is buffered as JSON and
+    //! decoded from that.
+
+    use std::fmt;
+
+    use serde::de::value::MapAccessDeserializer;
+    use serde::de::{self, Deserialize, Deserializer, MapAccess, Visitor};
+
+    use super::*;
+
+    /// Decodes the variant named `tag` from `d`, a map without the tag.
+    macro_rules! variants {
+        ($tag:expr, $d:expr, $( $name:literal => $variant:ident ),* $(,)?) => {
+            match $tag {
+                $( $name => $variant::deserialize($d).map(Node::$variant), )*
+                other => Err(de::Error::unknown_variant(other, &[$($name),*])),
+            }
+        };
+    }
+
+    fn variant<'de, D: Deserializer<'de>>(tag: &str, d: D) -> Result<Node, D::Error> {
+        variants!(tag, d,
+            "section" => Section,
+            "heading" => Heading,
+            "paragraph" => Paragraph,
+            "list" => List,
+            "list_item" => ListItem,
+            "block_quote" => BlockQuote,
+            "code_block" => CodeBlock,
+            "table" => Table,
+            "table_row" => TableRow,
+            "table_cell" => TableCell,
+            "thematic_break" => ThematicBreak,
+            "raw" => Raw,
+            "text" => Text,
+            "emphasis" => Emphasis,
+            "strong" => Strong,
+            "inline_code" => InlineCode,
+            "link" => Link,
+            "image" => Image,
+            "line_break" => LineBreak,
+            "admonition" => Admonition,
+            "definition_list" => DefinitionList,
+            "definition_term" => DefinitionTerm,
+            "definition_description" => DefinitionDescription,
+            "footnote_reference" => FootnoteReference,
+            "footnote_definition" => FootnoteDefinition,
+            "math" => Math,
+            "figure" => Figure,
+            "caption" => Caption,
+            "anchor" => Anchor,
+            "custom" => Custom,
+        )
+    }
+
+    /// A map key, without allocating when it is `type`.
+    enum Key {
+        Type,
+        Other(String),
+    }
+
+    impl<'de> Deserialize<'de> for Key {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            struct KeyVisitor;
+            impl Visitor<'_> for KeyVisitor {
+                type Value = Key;
+                fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    f.write_str("a field name")
+                }
+                fn visit_str<E: de::Error>(self, v: &str) -> Result<Key, E> {
+                    Ok(if v == "type" {
+                        Key::Type
+                    } else {
+                        Key::Other(v.to_owned())
+                    })
+                }
+            }
+            d.deserialize_str(KeyVisitor)
+        }
+    }
+
+    /// A node's `type`, borrowed from the input when possible.
+    struct Tag<'de>(std::borrow::Cow<'de, str>);
+
+    impl<'de> Deserialize<'de> for Tag<'de> {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            struct TagVisitor;
+            impl<'de> Visitor<'de> for TagVisitor {
+                type Value = Tag<'de>;
+                fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    f.write_str("a node type")
+                }
+                fn visit_borrowed_str<E: de::Error>(self, v: &'de str) -> Result<Tag<'de>, E> {
+                    Ok(Tag(v.into()))
+                }
+                fn visit_str<E: de::Error>(self, v: &str) -> Result<Tag<'de>, E> {
+                    Ok(Tag(v.to_owned().into()))
+                }
+            }
+            d.deserialize_str(TagVisitor)
+        }
+    }
+
+    struct NodeVisitor;
+
+    impl<'de> Visitor<'de> for NodeVisitor {
+        type Value = Node;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a document node: a map with a `type` field")
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Node, A::Error> {
+            let first = match map.next_key::<Key>()? {
+                None => return Err(de::Error::missing_field("type")),
+                Some(Key::Type) => {
+                    let Tag(tag) = map.next_value()?;
+                    return variant(&tag, MapAccessDeserializer::new(map));
+                }
+                Some(Key::Other(key)) => key,
+            };
+            // Slow path: buffer the whole map, then find the tag.
+            let mut fields = serde_json::Map::new();
+            fields.insert(first, map.next_value()?);
+            while let Some((key, value)) = map.next_entry::<String, Value>()? {
+                fields.insert(key, value);
+            }
+            let tag = match fields.remove("type") {
+                Some(Value::String(tag)) => tag,
+                Some(_) => return Err(de::Error::custom("`type` must be a string")),
+                None => return Err(de::Error::missing_field("type")),
+            };
+            variant(&tag, Value::Object(fields)).map_err(de::Error::custom)
+        }
+    }
+
+    impl<'de> Deserialize<'de> for Node {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            d.deserialize_map(NodeVisitor)
+        }
     }
 }
 
@@ -875,6 +1027,22 @@ mod tests {
         .into();
         assert_eq!(doc.title().as_deref(), Some("A b c"));
         assert_eq!(Document::new("x.md").title(), None);
+    }
+
+    #[test]
+    fn nodes_decode_whatever_the_key_order() {
+        let tag_first =
+            json!({"type": "heading", "level": 2, "children": [{"type": "text", "value": "A"}]});
+        let tag_last =
+            json!({"level": 2, "children": [{"value": "A", "type": "text"}], "type": "heading"});
+        let a: Node = serde_json::from_value(tag_first).unwrap();
+        let b: Node = serde_json::from_value(tag_last).unwrap();
+        assert_eq!(a, b);
+        assert_eq!(a.kind(), "heading");
+        let bad = serde_json::from_value::<Node>(json!({"type": "nope"})).unwrap_err();
+        assert!(bad.to_string().contains("unknown variant `nope`"), "{bad}");
+        let missing = serde_json::from_value::<Node>(json!({"level": 1})).unwrap_err();
+        assert!(missing.to_string().contains("type"), "{missing}");
     }
 
     #[test]
