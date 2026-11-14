@@ -73,6 +73,36 @@ impl Document {
             stack: self.children.iter().rev().collect(),
         }
     }
+
+    /// The document's title: its `title` metadata if that is a string, else
+    /// the text of its first heading.
+    pub fn title(&self) -> Option<String> {
+        self.metadata
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                self.descendants().find_map(|n| match n {
+                    Node::Heading(h) => Some(plain_text(&h.children)),
+                    _ => None,
+                })
+            })
+    }
+}
+
+/// The text of `nodes` without markup: text, inline code and image alt
+/// text, in order.
+pub fn plain_text(nodes: &[Node]) -> String {
+    let mut out = String::new();
+    for node in nodes {
+        match node {
+            Node::Text(t) => out.push_str(&t.value),
+            Node::InlineCode(c) => out.push_str(&c.value),
+            Node::Image(i) => out.push_str(&i.alt),
+            other => out.push_str(&plain_text(other.children())),
+        }
+    }
+    out
 }
 
 /// Depth-first iterator returned by [`Document::descendants`] and
@@ -607,6 +637,33 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn titles_and_plain_text() {
+        let mut doc = sample();
+        assert_eq!(doc.title().as_deref(), Some("Intro"));
+        doc.metadata.clear();
+        doc.children[0] = Heading {
+            level: 1,
+            children: vec![
+                text("A "),
+                InlineCode {
+                    value: "b".into(),
+                    ..InlineCode::default()
+                }
+                .into(),
+                Image {
+                    alt: " c".into(),
+                    ..Image::default()
+                }
+                .into(),
+            ],
+            ..Heading::default()
+        }
+        .into();
+        assert_eq!(doc.title().as_deref(), Some("A b c"));
+        assert_eq!(Document::new("x.md").title(), None);
     }
 
     #[test]
