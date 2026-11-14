@@ -11,6 +11,23 @@
 //!   when reading, so new fields can be added without breaking older plugins.
 //!
 //! Formats without a core node kind use [`Node::Custom`].
+//!
+//! ## The shape every parser produces
+//!
+//! Parsers for any source format hand transformers the same shape:
+//!
+//! - **Sections nest.** Content under a title is wrapped in a
+//!   [`Node::Section`] whose first child is the title [`Heading`], with
+//!   subsections nested inside it. A section's anchor id is
+//!   [`Section::id`]; [`Heading::id`] is only for headings outside the
+//!   section tree (e.g. inside a block quote). Content before the first
+//!   title stays at the top level.
+//! - **Ids are explicit or left out.** Parsers set ids the author wrote
+//!   (e.g. `{#id}` in Markdown, labels in reStructuredText). The host gives
+//!   every other section a unique id derived from its title after parsing.
+//! - **Cross-document links carry a [`LinkTarget`].** The host fills it in
+//!   for relative links to other documents; parsers set it for references
+//!   that are not paths, such as labels.
 
 use std::collections::BTreeMap;
 
@@ -169,6 +186,30 @@ pub enum Node {
     Image(Image),
     /// A hard line break.
     LineBreak(LineBreak),
+    /// A callout such as a note or warning.
+    Admonition(Admonition),
+    /// A list of terms and their descriptions: children alternate between
+    /// [`Node::DefinitionTerm`] and one or more
+    /// [`Node::DefinitionDescription`]s.
+    DefinitionList(DefinitionList),
+    /// A term in a [`DefinitionList`].
+    DefinitionTerm(DefinitionTerm),
+    /// The description of the term before it in a [`DefinitionList`].
+    DefinitionDescription(DefinitionDescription),
+    /// A reference to a footnote, e.g. `[^1]`.
+    FootnoteReference(FootnoteReference),
+    /// The text of a footnote.
+    FootnoteDefinition(FootnoteDefinition),
+    /// A mathematical formula, inline or on its own line.
+    Math(Math),
+    /// Content (usually an image) with an optional [`Node::Caption`] as its
+    /// last child.
+    Figure(Figure),
+    /// The caption of a [`Figure`].
+    Caption(Caption),
+    /// A link target with no content of its own, e.g. a reStructuredText
+    /// label in front of a paragraph.
+    Anchor(Anchor),
     /// A node kind defined by a plugin rather than by lsdocs.
     Custom(Custom),
 }
@@ -199,6 +240,16 @@ impl Node {
             Node::Link(_) => "link",
             Node::Image(_) => "image",
             Node::LineBreak(_) => "line_break",
+            Node::Admonition(_) => "admonition",
+            Node::DefinitionList(_) => "definition_list",
+            Node::DefinitionTerm(_) => "definition_term",
+            Node::DefinitionDescription(_) => "definition_description",
+            Node::FootnoteReference(_) => "footnote_reference",
+            Node::FootnoteDefinition(_) => "footnote_definition",
+            Node::Math(_) => "math",
+            Node::Figure(_) => "figure",
+            Node::Caption(_) => "caption",
+            Node::Anchor(_) => "anchor",
             Node::Custom(c) => return Owned(format!("custom:{}", c.kind)),
         })
     }
@@ -225,6 +276,16 @@ impl Node {
             Node::Link(n) => n.span,
             Node::Image(n) => n.span,
             Node::LineBreak(n) => n.span,
+            Node::Admonition(n) => n.span,
+            Node::DefinitionList(n) => n.span,
+            Node::DefinitionTerm(n) => n.span,
+            Node::DefinitionDescription(n) => n.span,
+            Node::FootnoteReference(n) => n.span,
+            Node::FootnoteDefinition(n) => n.span,
+            Node::Math(n) => n.span,
+            Node::Figure(n) => n.span,
+            Node::Caption(n) => n.span,
+            Node::Anchor(n) => n.span,
             Node::Custom(n) => n.span,
         }
     }
@@ -244,6 +305,13 @@ impl Node {
             Node::Emphasis(n) => &n.children,
             Node::Strong(n) => &n.children,
             Node::Link(n) => &n.children,
+            Node::Admonition(n) => &n.children,
+            Node::DefinitionList(n) => &n.children,
+            Node::DefinitionTerm(n) => &n.children,
+            Node::DefinitionDescription(n) => &n.children,
+            Node::FootnoteDefinition(n) => &n.children,
+            Node::Figure(n) => &n.children,
+            Node::Caption(n) => &n.children,
             Node::Custom(n) => &n.children,
             Node::CodeBlock(_)
             | Node::ThematicBreak(_)
@@ -251,7 +319,10 @@ impl Node {
             | Node::Text(_)
             | Node::InlineCode(_)
             | Node::Image(_)
-            | Node::LineBreak(_) => &[],
+            | Node::LineBreak(_)
+            | Node::FootnoteReference(_)
+            | Node::Math(_)
+            | Node::Anchor(_) => &[],
         }
     }
 
@@ -270,6 +341,13 @@ impl Node {
             Node::Emphasis(n) => Some(&mut n.children),
             Node::Strong(n) => Some(&mut n.children),
             Node::Link(n) => Some(&mut n.children),
+            Node::Admonition(n) => Some(&mut n.children),
+            Node::DefinitionList(n) => Some(&mut n.children),
+            Node::DefinitionTerm(n) => Some(&mut n.children),
+            Node::DefinitionDescription(n) => Some(&mut n.children),
+            Node::FootnoteDefinition(n) => Some(&mut n.children),
+            Node::Figure(n) => Some(&mut n.children),
+            Node::Caption(n) => Some(&mut n.children),
             Node::Custom(n) => Some(&mut n.children),
             Node::CodeBlock(_)
             | Node::ThematicBreak(_)
@@ -277,7 +355,10 @@ impl Node {
             | Node::Text(_)
             | Node::InlineCode(_)
             | Node::Image(_)
-            | Node::LineBreak(_) => None,
+            | Node::LineBreak(_)
+            | Node::FootnoteReference(_)
+            | Node::Math(_)
+            | Node::Anchor(_) => None,
         }
     }
 
@@ -317,7 +398,9 @@ macro_rules! node_struct {
 node_struct! {
     /// See [`Node::Section`].
     Section {
-        /// Anchor identifier, e.g. for linking to the section.
+        /// Anchor identifier for linking to the section. Set by the parser
+        /// if the author gave one; otherwise the host derives one from the
+        /// title.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         /// Content of the section.
@@ -329,9 +412,12 @@ node_struct! {
 node_struct! {
     /// See [`Node::Heading`].
     Heading {
-        /// Heading level, from 1 (top) to 6.
+        /// Heading level, from 1 (top) to 6. For a section title this is
+        /// the level as written, which may skip levels; the nesting of
+        /// sections is the structure.
         level: u8,
-        /// Anchor identifier, e.g. for linking to the heading.
+        /// Anchor identifier, only for headings that are not a section's
+        /// title (a section's anchor is [`Section::id`]).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         /// Inline content.
@@ -489,10 +575,35 @@ node_struct! {
         /// Link title (often shown as a tooltip).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
+        /// Where the link points inside the site, if it is a
+        /// cross-reference. Renderers prefer it over `url`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<LinkTarget>,
         /// Link text.
         #[serde(default)]
         children: Vec<Node>,
     }
+}
+
+/// The site-internal destination of a [`Link`].
+///
+/// A resolved target names a document, an anchor, or both (an anchor alone
+/// means the linking document). An unresolved one has only a `label`, to be
+/// looked up among the anchors of every document, e.g. by a transformer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct LinkTarget {
+    /// Source path of the target document, relative to the source
+    /// directory with `/` separators.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document: Option<String>,
+    /// Anchor id within the target document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
+    /// A label naming the target, not yet resolved to a document and
+    /// anchor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 node_struct! {
@@ -512,6 +623,106 @@ node_struct! {
 node_struct! {
     /// See [`Node::LineBreak`].
     LineBreak {}
+}
+
+node_struct! {
+    /// See [`Node::Admonition`].
+    Admonition {
+        /// What kind of callout, e.g. `"note"`, `"tip"`, `"warning"`.
+        kind: String,
+        /// A title replacing the kind's default one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        /// Content.
+        #[serde(default)]
+        children: Vec<Node>,
+    }
+}
+
+node_struct! {
+    /// See [`Node::DefinitionList`].
+    DefinitionList {
+        /// Terms and descriptions, in order.
+        #[serde(default)]
+        children: Vec<Node>,
+    }
+}
+
+node_struct! {
+    /// See [`Node::DefinitionTerm`].
+    DefinitionTerm {
+        /// Inline content.
+        #[serde(default)]
+        children: Vec<Node>,
+    }
+}
+
+node_struct! {
+    /// See [`Node::DefinitionDescription`].
+    DefinitionDescription {
+        /// Content.
+        #[serde(default)]
+        children: Vec<Node>,
+    }
+}
+
+node_struct! {
+    /// See [`Node::FootnoteReference`].
+    FootnoteReference {
+        /// The footnote's label, e.g. `"1"` or `"note"`.
+        label: String,
+    }
+}
+
+node_struct! {
+    /// See [`Node::FootnoteDefinition`].
+    FootnoteDefinition {
+        /// The label references use.
+        label: String,
+        /// Content.
+        #[serde(default)]
+        children: Vec<Node>,
+    }
+}
+
+node_struct! {
+    /// See [`Node::Math`].
+    Math {
+        /// The formula, e.g. in TeX notation.
+        value: String,
+        /// Whether it is set on its own line rather than inline.
+        #[serde(default)]
+        display: bool,
+    }
+}
+
+node_struct! {
+    /// See [`Node::Figure`].
+    Figure {
+        /// Anchor identifier, e.g. for linking to the figure.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// Content, then an optional caption.
+        #[serde(default)]
+        children: Vec<Node>,
+    }
+}
+
+node_struct! {
+    /// See [`Node::Caption`].
+    Caption {
+        /// Content.
+        #[serde(default)]
+        children: Vec<Node>,
+    }
+}
+
+node_struct! {
+    /// See [`Node::Anchor`].
+    Anchor {
+        /// The anchor identifier.
+        id: String,
+    }
 }
 
 node_struct! {
