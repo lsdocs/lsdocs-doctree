@@ -293,6 +293,43 @@ impl Node {
         }
     }
 
+    /// Mutable access to where this node came from, e.g. to move spans
+    /// found in a piece of text to where that piece is in the source.
+    pub fn span_mut(&mut self) -> &mut Option<Span> {
+        match self {
+            Node::Section(n) => &mut n.span,
+            Node::Heading(n) => &mut n.span,
+            Node::Paragraph(n) => &mut n.span,
+            Node::List(n) => &mut n.span,
+            Node::ListItem(n) => &mut n.span,
+            Node::BlockQuote(n) => &mut n.span,
+            Node::CodeBlock(n) => &mut n.span,
+            Node::Table(n) => &mut n.span,
+            Node::TableRow(n) => &mut n.span,
+            Node::TableCell(n) => &mut n.span,
+            Node::ThematicBreak(n) => &mut n.span,
+            Node::Raw(n) => &mut n.span,
+            Node::Text(n) => &mut n.span,
+            Node::Emphasis(n) => &mut n.span,
+            Node::Strong(n) => &mut n.span,
+            Node::InlineCode(n) => &mut n.span,
+            Node::Link(n) => &mut n.span,
+            Node::Image(n) => &mut n.span,
+            Node::LineBreak(n) => &mut n.span,
+            Node::Admonition(n) => &mut n.span,
+            Node::DefinitionList(n) => &mut n.span,
+            Node::DefinitionTerm(n) => &mut n.span,
+            Node::DefinitionDescription(n) => &mut n.span,
+            Node::FootnoteReference(n) => &mut n.span,
+            Node::FootnoteDefinition(n) => &mut n.span,
+            Node::Math(n) => &mut n.span,
+            Node::Figure(n) => &mut n.span,
+            Node::Caption(n) => &mut n.span,
+            Node::Anchor(n) => &mut n.span,
+            Node::Custom(n) => &mut n.span,
+        }
+    }
+
     /// This node's children; empty for leaf kinds.
     pub fn children(&self) -> &[Node] {
         match self {
