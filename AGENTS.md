@@ -43,3 +43,16 @@ shows them. `nur ci` runs what CI runs: run it before committing. Tools:
 - Licensing: `Apache-2.0 OR MIT`. Nothing is published.
 - Record what is left open in README.md's TODO section, and what the code
   does not do (or does differently) under Known limitations.
+
+## This repository
+
+| Path | What |
+|---|---|
+| `crates/doctree` | `lsdocs-doctree`: the document tree types. serde only; depends on nothing of lsdocs. |
+
+Every type here crosses process boundaries, so its serialized shape is the
+wire format (rules in `spec/wire.md` of lsdocs-protocol): maps keyed by
+`snake_case` field names, nodes internally tagged (`{"type": ...}`),
+optional fields omitted when empty, unknown fields ignored when reading.
+A change to a type here needs lsdocs-protocol's `nur gen` (schemas and
+fixtures) once this repository's change is in its lockfile.
