@@ -1,0 +1,3 @@
+crates = ["../crates/doctree"]
+output = "rust"
+target_dir = "../target/lsdocs-rustdoc"
