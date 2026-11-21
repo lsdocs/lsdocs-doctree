@@ -1,11 +1,11 @@
 [package]
 name = "lsdocs-doctree"
 description = "Document tree (AST) types: nodes, spans and metadata."
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-publish.workspace = true
+repository.workspace = true
 
 [lints]
 workspace = true
